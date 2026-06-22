@@ -1,6 +1,6 @@
 // server.js
 // Blockchain-Based Degree Attestation System — Backend API
-// Pure Node.js (zero external dependencies) so it runs anywhere with just `node server.js`.
+// Pure Node.js core (http/crypto/fs) plus pdfkit for certificate PDFs.
 //
 // Run:   node server.js
 // Port:  process.env.PORT || 4000
@@ -14,6 +14,7 @@ const path = require('path');
 const { Blockchain } = require('./blockchain');
 const { issueDegreeContract, revokeDegreeContract, verifyDegreeContract, isRevoked } = require('./contracts');
 const AC = require('./accessControl');
+const { generateCertificatePDF } = require('./pdfCertificate');
 
 const PORT = process.env.PORT || 4000;
 const blockchain = new Blockchain();
@@ -75,6 +76,52 @@ function getAuth(req) {
   const header = req.headers['authorization'] || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   return AC.verifyToken(token);
+}
+
+// Handles GET /api/degrees/:degreeHash/certificate — generates and streams a PDF.
+// Any authenticated participant (student/university/employer/admin) may download
+// the certificate for a degree that exists on-chain; revoked degrees still download
+// but are stamped REVOKED on the PDF itself rather than being blocked outright.
+async function handleCertificateDownload(req, res, degreeHash) {
+  const auth = requireAuth(req, res);
+  if (!auth) return;
+
+  const issuance = blockchain.findBlockByDegreeHash(degreeHash);
+  if (!issuance) {
+    return send(res, 404, { success: false, error: 'NOT_FOUND', message: 'No degree found with this hash on-chain.' });
+  }
+
+  const revoked = isRevoked(blockchain, degreeHash);
+  let revocation = null;
+  if (revoked) {
+    const revBlock = blockchain.chain.find(b => b.type === 'REVOCATION' && b.payload.degreeHash === degreeHash);
+    if (revBlock) {
+      revocation = { reason: revBlock.payload.reason, revokedBy: revBlock.payload.revokedBy, timestamp: revBlock.timestamp };
+    }
+  }
+
+  try {
+    const pdfBuffer = await generateCertificatePDF({
+      degree: issuance.payload,
+      block: { index: issuance.index, hash: issuance.hash, previousHash: issuance.previousHash, timestamp: issuance.timestamp },
+      revoked,
+      revocation
+    });
+
+    AC.logAccess({ userId: auth.userId, email: auth.email, event: 'CERTIFICATE_DOWNLOADED', success: true, detail: degreeHash });
+
+    const safeName = (issuance.payload.studentName || 'degree').replace(/[^a-z0-9]+/gi, '_');
+    res.writeHead(200, {
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${safeName}_certificate.pdf"`,
+      'Content-Length': pdfBuffer.length,
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end(pdfBuffer);
+  } catch (err) {
+    console.error('Certificate generation failed:', err);
+    send(res, 500, { success: false, error: 'CERTIFICATE_GENERATION_FAILED', message: err.message });
+  }
 }
 
 function requireAuth(req, res) {
@@ -263,6 +310,17 @@ const server = http.createServer(async (req, res) => {
 
   // API routes
   if (parsed.pathname.startsWith('/api/')) {
+    // Special-case: GET /api/degrees/:degreeHash/certificate (dynamic segment, binary response)
+    const certMatch = parsed.pathname.match(/^\/api\/degrees\/([^/]+)\/certificate$/);
+    if (req.method === 'GET' && certMatch) {
+      try {
+        return await handleCertificateDownload(req, res, decodeURIComponent(certMatch[1]));
+      } catch (err) {
+        console.error(err);
+        return send(res, 500, { success: false, error: 'SERVER_ERROR', message: err.message });
+      }
+    }
+
     const handler = routes[key];
     if (!handler) {
       return send(res, 404, { success: false, error: 'NOT_FOUND', message: `No route for ${key}` });
@@ -275,6 +333,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 500, { success: false, error: 'SERVER_ERROR', message: err.message });
     }
   }
+
 
   // Everything else: serve the frontend
   if (req.method === 'GET') {
