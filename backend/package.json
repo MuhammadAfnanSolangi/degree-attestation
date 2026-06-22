@@ -1,7 +1,7 @@
 {
   "name": "attestly-backend",
   "version": "1.0.0",
-  "description": "Blockchain-based Degree Attestation System - private blockchain simulation, smart-contract-style issuance/verification, RBAC, and dashboard backend. Zero external dependencies.",
+  "description": "Blockchain-based Degree Attestation System - private blockchain simulation, smart-contract-style issuance/verification, RBAC, dashboard backend, and PDF certificate generation.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -9,6 +9,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "pdfkit": "^0.15.0"
   },
   "keywords": ["blockchain", "degree-attestation", "private-blockchain", "education"],
   "author": "",
