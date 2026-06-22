@@ -246,7 +246,8 @@ document.getElementById('issueForm').addEventListener('submit', async (e) => {
     resultBox.className = 'result-box success';
     resultBox.innerHTML = `✔ Degree mined to block #${result.block.index}.
       <div class="hash-line">Degree hash (give this to the student/employer):<br>${result.degreeHash}
-      <button class="btn-copy" onclick="copyToClipboard('${result.degreeHash}')" style="margin-left:8px;">Copy</button></div>`;
+      <button class="btn-copy" onclick="copyToClipboard('${result.degreeHash}')" style="margin-left:8px;">Copy</button></div>
+      <button class="btn-small" style="margin-top:10px;border-color:var(--accent);color:var(--accent);" onclick="downloadCertificate('${result.degreeHash}')">Download Certificate (PDF)</button>`;
     resultBox.classList.remove('hidden');
     document.getElementById('issueForm').reset();
     loadMyDegrees();
@@ -294,7 +295,10 @@ function renderDegreeTable(elId, degrees, allowRevoke) {
       <td>${d.degreeDate}</td>
       <td><span class="status-pill ${d.revoked ? 'status-revoked' : 'status-active'}">${d.revoked ? 'Revoked' : 'Active'}</span></td>
       <td class="mono-cell">${shortHash(d.degreeHash)} <button class="btn-copy" onclick="copyToClipboard('${d.degreeHash}')">copy</button></td>
-      <td>${allowRevoke && !d.revoked ? `<button class="btn-small" onclick="revokeDegree('${d.degreeHash}')">Revoke</button>` : ''}</td>
+      <td>
+        <button class="btn-small" style="border-color:var(--accent);color:var(--accent);" onclick="downloadCertificate('${d.degreeHash}')">Certificate</button>
+        ${allowRevoke && !d.revoked ? `<button class="btn-small" onclick="revokeDegree('${d.degreeHash}')">Revoke</button>` : ''}
+      </td>
     </tr>
   `).join('');
   el.innerHTML = `
@@ -311,6 +315,34 @@ async function revokeDegree(hash) {
     await api('POST', '/degrees/revoke', { degreeHash: hash, reason });
     toast('Degree revoked');
     loadMyDegrees(); loadAllDegrees();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function downloadCertificate(hash) {
+  try {
+    const headers = {};
+    if (state.token) headers['Authorization'] = `Bearer ${state.token}`;
+    const res = await fetch(`${API_BASE}/degrees/${encodeURIComponent(hash)}/certificate`, { headers });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.message || `Could not generate certificate (${res.status})`);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="(.+)"/);
+    const filename = match ? match[1] : 'degree_certificate.pdf';
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast('Certificate downloaded');
   } catch (err) {
     toast(err.message, true);
   }
@@ -341,7 +373,8 @@ document.getElementById('verifyForm').addEventListener('submit', async (e) => {
           Program: ${escapeHtml(result.record.program)}<br>
           University: ${escapeHtml(result.record.universityName)}<br>
           Conferred: ${result.record.degreeDate}
-        </div>`;
+        </div>
+        <button class="btn-small" style="margin-top:10px;border-color:var(--accent);color:var(--accent);" onclick="downloadCertificate('${payload.degreeHash}')">Download Certificate (PDF)</button>`;
     } else {
       resultBox.innerHTML = `✘ NOT VALID (${result.reason}) — ${result.detail}`;
     }
